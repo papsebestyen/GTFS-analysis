@@ -1,3 +1,4 @@
+from typing import TYPE_CHECKING
 import geopandas as gpd
 import networkx as nx
 import numpy as np
@@ -11,9 +12,12 @@ from .meta import Stops, StopTimes
 from .naming import DATA_DIR
 from .utils import _parse_time
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def _get_transit_edges(stop_times: pd.DataFrame):
-    return (
+
+def _get_transit_edges(stop_times: pd.DataFrame, prune: bool = False):
+    transit_edges = (
         stop_times.reset_index()
         .assign(
             **{
@@ -37,9 +41,16 @@ def _get_transit_edges(stop_times: pd.DataFrame):
             ],
         ]
         .astype({"distance": int})
-        .groupby([Stops.stop_id + "_start", Stops.stop_id + "_stop"])
-        .min()
     )
+    if prune:
+        transit_edges = transit_edges.groupby(
+            [Stops.stop_id + "_start", Stops.stop_id + "_stop"]
+        ).min()
+    else:
+        transit_edges = transit_edges.set_index(
+            [Stops.stop_id + "_start", Stops.stop_id + "_stop"]
+        )
+    return transit_edges
 
 
 def _parse_nearest_indicies(
@@ -101,8 +112,9 @@ def _get_node_recs(df: pd.DataFrame):
     return [*zip(df.index, df[["stop_lat", "stop_lon"]].to_dict("records"))]
 
 
-def load_network(overwrite: bool = False):
-    if (fp := DATA_DIR / "tree.pickle").exists() and not overwrite:
+def load_network(fp: "Path" = None, overwrite: bool = False, prune: bool = True):
+    fp = fp or DATA_DIR / "tree.pickle"
+    if fp.exists() and not overwrite:
         return nx.read_gpickle(fp)
 
     stops_trepo = TableRepo(root_path=DATA_DIR / "stops")
@@ -122,8 +134,10 @@ def load_network(overwrite: bool = False):
 
     graph = nx.MultiDiGraph()
     graph.add_nodes_from(_get_node_recs(stops_df))
-    graph.add_edges_from(_get_edge_recs(_get_transit_edges(stop_times=stop_times_df)))
+    graph.add_edges_from(
+        _get_edge_recs(_get_transit_edges(stop_times=stop_times_df, prune=prune))
+    )
     graph.add_edges_from(_get_edge_recs(_get_walk_edges(stops=stops_df)))
 
-    nx.write_gpickle(graph, DATA_DIR / "tree.pickle")
+    nx.write_gpickle(graph, fp)
     return graph
